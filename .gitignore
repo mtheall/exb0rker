@@ -1,0 +1,7 @@
+build/
+*.elf
+*.elf.dbg
+*.fx2
+*.imp.a
+gfx/*.h
+gfx/*.s

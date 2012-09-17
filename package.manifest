@@ -1,0 +1,20 @@
+Title: exb0rker
+Author: mtheall <mtheall@mtheall.com>
+Description: A file and directory exb0rker
+Version: 1.0
+
+Copyright: Public Domain
+
+; Dependencies are a comma-delimited package list. Minimum versions (optional)
+; can be specified with the (>= versionnumber) syntax.
+
+;Depends: somelib1, somelib2 (>= 1.1)
+
+License: Public Domain
+
+; Install/uninstall hooks - they are commands to be execute before/after installation/uninstallation:
+; Available hooks:
+;Pre-Install:
+;Post-Install:
+;Pre-Uninstall:
+;Post-Uninstall:
