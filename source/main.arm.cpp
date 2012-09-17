@@ -60,6 +60,8 @@ void MainApp::OnActivate() {
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
   scroll   = 0;
+
+  keysSetRepeat(15, 4);
 }
 
 void MainApp::OnVBlank() {
@@ -67,6 +69,7 @@ void MainApp::OnVBlank() {
   char          directory[256];
   int           selection = -1;
   word_t        down      = keysDown();
+  word_t        repeat    = keysDownRepeat();
 
   if(down & KEY_TOUCH) {
     touchRead(&touch);
@@ -93,10 +96,10 @@ void MainApp::OnVBlank() {
     }
   }
 
-  if((down & KEY_DOWN) && scroll < numDirs - (192-8)/fontHeight) {
+  if((repeat & KEY_DOWN) && scroll < numDirs - (192-8)/fontHeight) {
     scroll++;
   }
-  else if((down & KEY_UP) && scroll > 0) {
+  else if((repeat & KEY_UP) && scroll > 0) {
     scroll--;
   }
 
