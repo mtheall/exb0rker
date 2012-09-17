@@ -130,13 +130,10 @@ void MainApp::print() {
 }
 
 int main() {
-  static MainApp *app = NULL;
-
-  if(app == NULL)
-    app = new MainApp();
+  MainApp app;
 
   g_guiManager = GetGuiManagerChecked();
-  g_guiManager->RunApplication(app);
+  g_guiManager->RunApplication(&app);
 
   return 0;
 }
