@@ -14,6 +14,7 @@ typedef struct {
 // Main application class
 class MainApp : public CApplication {
 private:
+  char    cwd[FILENAME_MAX];
   entry_t entries[NUM_ENTRIES];
   FontPtr font;
   struct dirent **dirList;

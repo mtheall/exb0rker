@@ -8,6 +8,7 @@
 #include "fx2.h"
 #include "appicon.h"
 #include <feos3d.h>
+#include <sys/stat.h>
 
 IGuiManager* g_guiManager;
 
@@ -41,6 +42,8 @@ void MainApp::OnActivate() {
   videoSetMode   (MODE_0_3D);
   videoSetModeSub(MODE_3_2D);
   vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_MAIN_SPRITE, VRAM_C_SUB_BG, VRAM_D_SUB_SPRITE);
+
+  bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
 
   // initialize OAM
   oamInit(&oamMain, SpriteMapping_Bmp_1D_128, false);
@@ -100,6 +103,10 @@ void MainApp::OnActivate() {
   // reinitialize directory listing
   if(dirList != NULL)
     freescandir(dirList, numDirs);
+  getcwd(cwd, sizeof(cwd));
+  dmaFillHalfWords(Colors::White, bgGetGfxPtr(7), 256*256*sizeof(u16));
+  font->PrintText(bgGetGfxPtr(7), 0, 16-4, cwd, Colors::Black, PrintTextFlags::AtBaseline);
+
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
   scroll   = 0;
@@ -138,7 +145,39 @@ void MainApp::OnVBlank() {
 
         // update the selection
         if(selection != selected) {
+          u16 *ptr = &(bgGetGfxPtr(7)[256*16]);
+          struct stat statbuf;
+          char str[1024];
+          surface_t surface = { ptr + 24, 256 - 24, 256-16, 256, };
+
           selected = selection;
+          stat(dirList[selected]->d_name, &statbuf);
+
+          dmaFillHalfWords(Colors::White, ptr, 256*(256-16)*sizeof(u16));
+          sprintf(str, "%s\n", dirList[selected]->d_name);
+          if(!TYPE_DIR(dirList[selected]->d_type)) {
+            sprintf(str+strlen(str), "Size: ");
+            if(statbuf.st_size < 1000)
+              sprintf(str+strlen(str), "%u\n", statbuf.st_size);
+            else if(statbuf.st_size < 10240)
+              sprintf(str+strlen(str), "%u.%02uKB\n", statbuf.st_size/1024,
+                                   (statbuf.st_size%1024)*100/1024);
+            else if(statbuf.st_size < 102400)
+              sprintf(str+strlen(str), "%u.%01uKB\n", statbuf.st_size/1024,
+                                   (statbuf.st_size%1024)*10/1024);
+            else if(statbuf.st_size < 1000000)
+              sprintf(str+strlen(str), "%uKB\n", statbuf.st_size/1024);
+            else if(statbuf.st_size < 10485760)
+              sprintf(str+strlen(str), "%u.%02uMB\n", statbuf.st_size/1048576,
+                                   (statbuf.st_size%1048576)*100/1048576);
+            else if(statbuf.st_size < 104857600)
+              sprintf(str+strlen(str), "%u.%01uMB\n", statbuf.st_size/1048576,
+                                   (statbuf.st_size%1048576)*10/1048576);
+            else
+              sprintf(str+strlen(str), "%uMB\n", statbuf.st_size/1048576);
+          }
+
+          font->PrintText(&surface, 0, 16-4, str, Colors::Blue, PrintTextFlags::AtBaseline);
           // refresh the 'selected' status for each texture
           for(int i = 0; i < NUM_ENTRIES; i++)
             entries[i].selected = entries[i].entry == selected;
@@ -151,6 +190,9 @@ void MainApp::OnVBlank() {
 
             // move to the new directory
             chdir(directory);
+            getcwd(cwd, sizeof(cwd));
+            dmaFillHalfWords(Colors::White, bgGetGfxPtr(7), 256*256*sizeof(u16));
+            font->PrintText(bgGetGfxPtr(7), 0, 16-4, cwd, Colors::Black, PrintTextFlags::AtBaseline);
 
             // scan the new directory
             numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
