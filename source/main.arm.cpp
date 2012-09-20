@@ -123,6 +123,9 @@ void MainApp::OnVBlank() {
   word_t        down      = keysDown();
   word_t        repeat    = keysDownRepeat();
 
+  // draw the scene ASAP
+  redraw();
+
   if(down & KEY_TOUCH) {
     touchRead(&touch);
 
@@ -177,13 +180,10 @@ void MainApp::OnVBlank() {
   }
 
   // check for exit
-  if (down & KEY_B) {
+  if(down & KEY_B) {
     Close();
     return;
   }
-
-  // draw the scene
-  redraw();
 }
 
 void MainApp::redraw() {
@@ -200,7 +200,6 @@ void MainApp::redraw() {
     // figure out which texture entry to use
     offset = (scroll + i) % NUM_ENTRIES;
     tex = entries[offset].texture;
-    glBindTexture(GL_TEXTURE_2D, tex);
 
     // this texture does not belong to this direntry or has just been selected/deselected
     if(entries[offset].entry != scroll+i || entries[offset].selected != entries[offset].oldSelected) {
