@@ -1,23 +1,32 @@
 #pragma once
+#include <feos.h>
 #include <coopgui.h>
 using namespace FeOS::UI;
+
+typedef struct {
+  int     texture;
+  int     entry;
+  bool    selected;
+  bool    oldSelected;
+} entry_t;
+#define NUM_ENTRIES (13)
 
 // Main application class
 class MainApp : public CApplication {
 private:
-  color_t* buf;
+  entry_t entries[NUM_ENTRIES];
   FontPtr font;
-  int fontHeight;
   struct dirent **dirList;
   int numDirs;
   int selected;
   int scroll;
 
-  void print();
+  void redraw();
 
 public:
   MainApp();
   ~MainApp();
   void OnActivate();
+  void OnDeactivate();
   void OnVBlank();
 };

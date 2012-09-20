@@ -35,8 +35,8 @@ MANIFEST      := package.manifest
 PACKAGENAME   := $(TARGET)
 
 CONF_DEFINES       :=
-CONF_USERLIBS      := coopgui
-CONF_LIBS          := -lcoopgui
+CONF_USERLIBS      := coopgui feos3d
+CONF_LIBS          := -lcoopgui -lfeos3d
 
 include $(FEOSMK)/app.mk
 include $(FEOSMK)/package.mk

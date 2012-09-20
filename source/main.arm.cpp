@@ -7,14 +7,17 @@
 #include "folder.h"
 #include "fx2.h"
 #include "appicon.h"
+#include <feos3d.h>
 
 IGuiManager* g_guiManager;
 
-static u16* fileIcon   = NULL;
-static u16* folderIcon = NULL;
-static u16* fx2Icon    = NULL;
-static u16* icons[3];
+typedef struct {
+  u16 *main, *sub;
+} icon_t;
 
+static icon_t fileIcon   = { NULL, NULL, };
+static icon_t folderIcon = { NULL, NULL, };
+static icon_t fx2Icon    = { NULL, NULL, };
 
 MainApp::MainApp() {
   SetTitle("FeOS File Manager");
@@ -31,37 +34,76 @@ MainApp::~MainApp() {
 }
 
 void MainApp::OnActivate() {
-  int bg;
-
-  font       = g_guiManager->GetSystemFont();
-  fontHeight = font->GetHeight();
+  font = g_guiManager->GetSystemFont();
 
   lcdMainOnBottom();
-  videoSetMode(MODE_3_2D);
-  vramSetPrimaryBanks(VRAM_A_MAIN_BG, VRAM_B_MAIN_SPRITE, VRAM_C_LCD, VRAM_D_LCD);
-
-  bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
-  buf = bgGetGfxPtr(bg);
-
-  dmaFillHalfWords(Colors::White, buf, 256*192*2);
+  videoSetMode   (MODE_0_3D);
+  videoSetModeSub(MODE_3_2D);
+  vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_MAIN_SPRITE, VRAM_C_SUB_BG, VRAM_D_SUB_SPRITE);
 
   oamInit(&oamMain, SpriteMapping_Bmp_1D_128, false);
-  if(fileIcon   == NULL) icons[0] = fileIcon   = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
-  if(folderIcon == NULL) icons[1] = folderIcon = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
-  if(fx2Icon    == NULL) icons[2] = fx2Icon    = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
+  oamInit(&oamSub,  SpriteMapping_Bmp_1D_128, false);
+
+  if(fileIcon.main   == NULL) fileIcon.main   = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
+  if(fileIcon.sub    == NULL) fileIcon.sub    = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_Bmp);
+  if(folderIcon.main == NULL) folderIcon.main = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
+  if(folderIcon.sub  == NULL) folderIcon.sub  = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_Bmp);
+  if(fx2Icon.main    == NULL) fx2Icon.main    = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
+  if(fx2Icon.sub     == NULL) fx2Icon.sub     = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_Bmp);
 
   DC_FlushAll();
-  dmaCopy(fileBitmap,   fileIcon,   fileBitmapLen);
-  dmaCopy(folderBitmap, folderIcon, folderBitmapLen);
-  dmaCopy(fx2Bitmap,    fx2Icon,    fx2BitmapLen);
+  dmaCopy(fileBitmap,   fileIcon.main,   fileBitmapLen);
+  dmaCopy(fileBitmap,   fileIcon.sub,    fileBitmapLen);
+  dmaCopy(folderBitmap, folderIcon.main, folderBitmapLen);
+  dmaCopy(folderBitmap, folderIcon.sub,  folderBitmapLen);
+  dmaCopy(fx2Bitmap,    fx2Icon.main,    fx2BitmapLen);
+  dmaCopy(fx2Bitmap,    fx2Icon.sub,     fx2BitmapLen);
+
+  glInit();
+  glEnable(GL_TEXTURE_2D|GL_BLEND);
+  glClearColor(31, 31, 31, 31);
+  glClearPolyID(63);
+  glClearDepth(GL_MAX_DEPTH);
+  glViewport(0, 0, 255, 191);
+
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
+  glOrthof32(0, 256, 192, 0, -1<<12, 1<<12);
+  glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+  glMatrixMode(GL_MODELVIEW);
+  glLoadIdentity();
+
+  glColor(RGB15(31, 31, 31));
+  glMaterialf(GL_AMBIENT,  RGB15(31, 31, 31));
+  glMaterialf(GL_DIFFUSE,  RGB15(31, 31, 31));
+  glMaterialf(GL_EMISSION, RGB15(31, 31, 31));
+  glMaterialf(GL_SPECULAR, ARGB16(1, 31, 31, 31));
+  glMaterialShinyness();
+
+  for(u32 i = 0; i < sizeof(entries)/sizeof(entries[0]); i++) {
+    glGenTextures(1, &entries[i].texture);
+    glBindTexture(GL_TEXTURE_2D, entries[i].texture);
+    glTexImage2D(0, 0, GL_RGBA, TEXTURE_SIZE_256, TEXTURE_SIZE_16, 0, TEXGEN_TEXCOORD, NULL);
+    entries[i].entry = -1;
+    entries[i].selected = false;
+    entries[i].oldSelected = false;
+  }
 
   if(dirList != NULL)
     freescandir(dirList, numDirs);
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
+  redraw();
+
   selected = -1;
   scroll   = 0;
 
   keysSetRepeat(15, 4);
+}
+
+void MainApp::OnDeactivate() {
+  for(int i = 0; i < NUM_ENTRIES; i++)
+    glDeleteTextures(1, &entries[i].texture);
+  glDeinit();
 }
 
 void MainApp::OnVBlank() {
@@ -75,12 +117,14 @@ void MainApp::OnVBlank() {
     touchRead(&touch);
 
     if(dirList != NULL) {
-      if((touch.py-8)/fontHeight + scroll < numDirs
-      && (touch.py-8)/fontHeight >= 0
-      && (touch.py-8)/fontHeight < (192-8)/fontHeight) {
-        selection = (touch.py-8)/fontHeight + scroll;
+      if((touch.py-8)/16 + scroll < numDirs
+      && (touch.py-8)/16 >= 0
+      && (touch.py-8)/16 < (192-8)/16) {
+        selection = (touch.py-8)/16 + scroll;
         if(selection != selected) {
           selected = selection;
+          for(int i = 0; i < NUM_ENTRIES; i++)
+            entries[i].selected = entries[i].entry == selected;
         }
         else {
           if(TYPE_DIR(dirList[selected]->d_type)) {
@@ -88,6 +132,11 @@ void MainApp::OnVBlank() {
             freescandir(dirList, numDirs);
             chdir(directory);
             numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
+            for(int i = 0; i < NUM_ENTRIES; i++) {
+              entries[i].entry = -1;
+              entries[i].selected = false;
+              entries[i].oldSelected = false;
+            }
             selected = -1;
             scroll = 0;
           }
@@ -96,7 +145,7 @@ void MainApp::OnVBlank() {
     }
   }
 
-  if((repeat & KEY_DOWN) && scroll < numDirs - (192-8)/fontHeight) {
+  if((repeat & KEY_DOWN) && scroll < numDirs - (192-8)/16) {
     scroll++;
   }
   else if((repeat & KEY_UP) && scroll > 0) {
@@ -108,28 +157,60 @@ void MainApp::OnVBlank() {
     return;
   }
 
-  print();
+  redraw();
 }
 
-void MainApp::print() {
+void MainApp::redraw() {
+  u32 offset;
+  int tex;
   oamClear(&oamMain, 0, 0);
-  dmaFillHalfWords(Colors::White, buf, 256*192*2);
+  oamClear(&oamSub,  0, 0);
 
-  for(int i = 0; i < numDirs && i < (192-8)/fontHeight; i++) {
-    if(TYPE_DIR(dirList[scroll+i]->d_type))
-      oamSet(&oamMain, i, 4, 8+fontHeight*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             folderIcon, -1, false, false, false, false, false);
-    else if(strcmp(".fx2", dirList[scroll+i]->d_name + strlen(dirList[scroll+i]->d_name)-4) == 0)
-      oamSet(&oamMain, i, 4, 8+fontHeight*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             fx2Icon, -1, false, false, false, false, false);
-    else
-      oamSet(&oamMain, i, 4, 8+fontHeight*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             fileIcon, -1, false, false, false, false, false);
-    if(scroll+i == selected)
-      font->PrintText(buf, 24, 8+fontHeight*i, dirList[scroll+i]->d_name, Colors::Blue);
-    else
-      font->PrintText(buf, 24, 8+fontHeight*i, dirList[scroll+i]->d_name, Colors::Black);
+  vramSetBankA(VRAM_A_LCD);
+  for(int i = 0; i < numDirs && i < NUM_ENTRIES-2; i++) {
+    offset = (scroll + i) % NUM_ENTRIES;
+    tex = entries[offset].texture;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    if(entries[offset].entry != scroll+i || entries[offset].selected != entries[offset].oldSelected) {
+      entries[offset].entry = scroll+i;
+      dmaFillWords(0, glGetTexturePointer(tex), 256*16*sizeof(u16));
+      if(scroll+i == selected)
+        font->PrintText((color_t*)glGetTexturePointer(tex), 24, 0, dirList[scroll+i]->d_name, Colors::Blue);
+      else
+        font->PrintText((color_t*)glGetTexturePointer(tex), 24, 0, dirList[scroll+i]->d_name, Colors::Black);
+    }
+    entries[offset].oldSelected = entries[offset].selected;
   }
+  vramSetBankA(VRAM_A_TEXTURE);
+
+  glBegin(GL_QUADS);
+  for(int i = 0; i < numDirs && i < NUM_ENTRIES-2; i++) {
+    if(TYPE_DIR(dirList[scroll+i]->d_type)) {
+      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             folderIcon.main, -1, false, false, false, false, false);
+    }
+    else if(strcmp(".fx2", dirList[scroll+i]->d_name + strlen(dirList[scroll+i]->d_name)-4) == 0) {
+      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             fx2Icon.main, -1, false, false, false, false, false);
+    }
+    else {
+      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             fileIcon.main, -1, false, false, false, false, false);
+    }
+
+    offset = (scroll + i) % NUM_ENTRIES;
+    glBindTexture(GL_TEXTURE_2D, entries[offset].texture);
+    glTexCoord2t16(inttot16(0), inttot16(0));
+    glVertex3v16(0, 8+16*i, 2);
+    glTexCoord2t16(inttot16(0), inttot16(16));
+    glVertex3v16(0, 8+16*i+16, 2);
+    glTexCoord2t16(inttot16(256), inttot16(16));
+    glVertex3v16(256, 8+16*i+16, 2);
+    glTexCoord2t16(inttot16(256), inttot16(0));
+    glVertex3v16(256, 8+16*i, 2);
+  }
+  glEnd();
+  glFlush(0);
 }
 
 int main() {
