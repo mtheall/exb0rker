@@ -189,6 +189,7 @@ void MainApp::OnVBlank() {
 void MainApp::redraw() {
   u32 offset;
   int tex;
+  surface_t surface = { NULL, 256, 16, 256, };
 
   // clear all the sprites
   oamClear(&oamMain, 0, 0);
@@ -210,10 +211,11 @@ void MainApp::redraw() {
       dmaFillWords(0, glGetTexturePointer(tex), 256*16*sizeof(u16));
 
       // draw blue if selected, black if not selected
+      surface.buffer = (color_t*)glGetTexturePointer(tex);
       if(scroll+i == selected)
-        font->PrintText((color_t*)glGetTexturePointer(tex), 24, 0, dirList[scroll+i]->d_name, Colors::Blue);
+        font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Blue, PrintTextFlags::AtBaseline);
       else
-        font->PrintText((color_t*)glGetTexturePointer(tex), 24, 0, dirList[scroll+i]->d_name, Colors::Black);
+        font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Black, PrintTextFlags::AtBaseline);
     }
     // update the "previous" selection state
     entries[offset].oldSelected = entries[offset].selected;
