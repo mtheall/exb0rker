@@ -195,7 +195,6 @@ void MainApp::redrawList() {
 
   // clear all the sprites
   oamClear(&oamMain, 0, 0);
-  oamClear(&oamSub,  0, 0);
 
   // clear the list
   dmaFillWords(Colors::Transparent, list.buf, list.size);
@@ -237,6 +236,8 @@ void MainApp::redrawInfo() {
 
   info.stale = false;
 
+  // clear the graphics
+  oamClear(&oamSub,  0, 0);
   dmaFillHalfWords(Colors::Transparent, info.buf, info.size);
 
   if(selected == -1)
@@ -245,7 +246,15 @@ void MainApp::redrawInfo() {
   stat(dirList[selected]->d_name, &statbuf);
 
   sprintf(str, "%s\n", dirList[selected]->d_name);
+  oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+         folderIcon.sub, -1, false, false, false, false, false);
   if(!TYPE_DIR(dirList[selected]->d_type)) {
+    if(strcmp(".fx2", dirList[selected]->d_name + strlen(dirList[selected]->d_name)-4) == 0)
+      oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             fx2Icon.sub, -1, false, false, false, false, false);
+    else
+      oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             fileIcon.sub, -1, false, false, false, false, false);
     strcat(str, "File\nSize: "); // TODO: description
     if(statbuf.st_size < 1000)
       sprintf(str+strlen(str), "%u byte%c\n", statbuf.st_size, statbuf.st_size != 1 ? 's' : ' ');
@@ -271,7 +280,7 @@ void MainApp::redrawInfo() {
   else
     strcat(str, "Directory");
 
-  font->PrintText(&surface, 0, 16-1, str, Colors::Black, PrintTextFlags::AtBaseline);
+  font->PrintText(&surface, 16, 16-1, str, Colors::Black, PrintTextFlags::AtBaseline);
 }
 
 void MainApp::redrawCwd() {
