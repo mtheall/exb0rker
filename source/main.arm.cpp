@@ -136,9 +136,15 @@ void MainApp::OnVBlank() {
 
         // update the selection
         if(selection != selected) {
+          surface_t surface[2] = {
+            { &list.buf[(selected -scroll)*256*16 + 256*8], 256, 16, 256, },
+            { &list.buf[(selection-scroll)*256*16 + 256*8], 256, 16, 256, },
+          };
+          if(selected != -1)
+            font->PrintText(&surface[0], 24, 16-4, dirList[selected]->d_name, Colors::Black, PrintTextFlags::AtBaseline);
+          font->PrintText(&surface[1], 24, 16-4, dirList[selection]->d_name, Colors::Blue, PrintTextFlags::AtBaseline);
           selected = selection;
           info.stale = true;
-          list.stale = true;
         }
         else { // we have selected a selected direntry
           // open a directory
