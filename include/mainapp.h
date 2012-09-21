@@ -3,31 +3,30 @@
 #include <coopgui.h>
 using namespace FeOS::UI;
 
+#define NUM_ENTRIES 11
+
 typedef struct {
-  int     texture;
-  int     entry;
-  bool    selected;
-  bool    oldSelected;
-} entry_t;
-#define NUM_ENTRIES (13)
-#define COLOR_UIBACKDROP MakeColor(30,31,31)
+  u16  *buf;
+  int  size;
+  bool stale;
+} canvas_t;
 
 // Main application class
 class MainApp : public CApplication {
 private:
-  char    cwd[FILENAME_MAX];
-  entry_t entries[NUM_ENTRIES];
-  FontPtr font;
+  char          cwd[FILENAME_MAX];
+  FontPtr       font;
   struct dirent **dirList;
-  u16* topBmpBuf;
-  int numDirs;
-  int selected;
-  int scroll;
-  bool needToRedrawInfo;
+  int           numDirs;
+  int           selected;
+  int           scroll;
+  canvas_t      cwdstr;
+  canvas_t      info;
+  canvas_t      list;
 
-  void redraw();
-  void redrawInfo();
   void redrawCwd();
+  void redrawInfo();
+  void redrawList();
 
 public:
   MainApp();

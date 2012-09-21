@@ -8,7 +8,6 @@
 #include "fx2.h"
 #include "appicon.h"
 #include "topbg.h"
-#include <feos3d.h>
 #include <sys/stat.h>
 
 IGuiManager* g_guiManager;
@@ -24,11 +23,13 @@ static icon_t fx2Icon    = { NULL, NULL, };
 MainApp::MainApp() {
   SetTitle("FeOS File Manager");
   SetIcon((color_t*)appiconBitmap);
-  dirList  = NULL;
-  numDirs  = 0;
-  selected = -1;
-  scroll   = 0;
-  needToRedrawInfo = false;
+  dirList    = NULL;
+  numDirs    =  0;
+  selected   = -1;
+  scroll     =  0;
+  memset(&cwdstr, 0, sizeof(cwdstr));
+  memset(&info,   0, sizeof(info));
+  memset(&list,   0, sizeof(list));
 }
 
 MainApp::~MainApp() {
@@ -37,28 +38,45 @@ MainApp::~MainApp() {
 }
 
 void MainApp::OnActivate() {
+  // get font
   font = g_guiManager->GetSystemFont();
 
   // initialize video
   lcdMainOnBottom();
-  videoSetMode   (MODE_0_3D);
+  videoSetMode   (MODE_3_2D);
   videoSetModeSub(MODE_3_2D);
-  vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_MAIN_SPRITE, VRAM_C_SUB_BG, VRAM_D_SUB_SPRITE);
-  BG_PALETTE[0] = COLOR_UIBACKDROP;
+  vramSetPrimaryBanks(VRAM_A_MAIN_BG, VRAM_B_MAIN_SPRITE, VRAM_C_SUB_BG, VRAM_D_SUB_SPRITE);
 
-  // initialize top screen
-  int topFontBg = bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 2, 0);
-  int topUIBg = bgInitSub(2, BgType_Text8bpp, BgSize_T_256x256, 0, 1);
+  // initialize backgrounds
+  int botfb  = bgInit   (3, BgType_Bmp16,    BgSize_B16_256x256, 0, 0);
+  int topovl = bgInitSub(2, BgType_Text8bpp, BgSize_T_256x256,  15, 0);
+  int topfb  = bgInitSub(3, BgType_Bmp16,    BgSize_B16_256x256, 2, 0);
+  bgSetPriority(topovl, 3);
+  bgSetPriority(botfb,  2);
 
-  // clear top screen bitmap
-  topBmpBuf = bgGetGfxPtr(topFontBg);
-  dmaFillHalfWords(Colors::Transparent, topBmpBuf, 256*192*sizeof(u16));
+  // initialize canvases
+  cwdstr.buf   = &bgGetGfxPtr(topfb)[256*144];
+  cwdstr.size  = 256*40*sizeof(u16);
+  cwdstr.stale = true;
+  info.buf     = &bgGetGfxPtr(topfb)[256*16];
+  info.size    = 256*72*sizeof(u16);
+  info.stale   = true;
+  list.buf     = bgGetGfxPtr(botfb);
+  list.size    = 256*192*sizeof(u16);
+  list.stale   = true;
+
+  // clear framebuffers
+  dmaFillHalfWords(Colors::Transparent, bgGetGfxPtr(topfb), 256*192*sizeof(u16));
+  dmaFillHalfWords(Colors::Transparent, bgGetGfxPtr(botfb), 256*192*sizeof(u16));
 
   // load top screen tiled background
-  bgSetPriority(topUIBg, 3);
-  dmaCopy(topbgTiles, bgGetGfxPtr(topUIBg), topbgTilesLen);
-  dmaCopy(topbgMap,   bgGetMapPtr(topUIBg), topbgMapLen);
-  dmaCopy(topbgPal,   BG_PALETTE_SUB,       topbgPalLen);
+  dmaCopy(topbgTiles, bgGetGfxPtr(topovl), topbgTilesLen);
+  dmaCopy(topbgMap,   bgGetMapPtr(topovl), topbgMapLen);
+  dmaCopy(topbgPal,   BG_PALETTE_SUB,      topbgPalLen);
+
+  // set the backdrop color
+  BG_PALETTE[0]     = RGB15(30, 31, 31);
+  BG_PALETTE_SUB[0] = RGB15(30, 31, 31);
 
   // initialize OAM
   oamInit(&oamMain, SpriteMapping_Bmp_1D_128, false);
@@ -73,7 +91,6 @@ void MainApp::OnActivate() {
   if(fx2Icon.sub     == NULL) fx2Icon.sub     = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_Bmp);
 
   // copy sprites into vram
-  DC_FlushAll();
   dmaCopy(fileBitmap,   fileIcon.main,   fileBitmapLen);
   dmaCopy(fileBitmap,   fileIcon.sub,    fileBitmapLen);
   dmaCopy(folderBitmap, folderIcon.main, folderBitmapLen);
@@ -81,44 +98,9 @@ void MainApp::OnActivate() {
   dmaCopy(fx2Bitmap,    fx2Icon.main,    fx2BitmapLen);
   dmaCopy(fx2Bitmap,    fx2Icon.sub,     fx2BitmapLen);
 
-  // initialize 3D engine
-  glInit();
-  glEnable(GL_TEXTURE_2D|GL_BLEND);
-  glClearColor(31, 31, 31, 0);
-  glClearPolyID(63);
-  glClearDepth(GL_MAX_DEPTH);
-
-  // set up the view
-  glViewport(0, 0, 255, 191);
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  glOrthof32(0, 256, 192, 0, -1<<12, 1<<12);
-  glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
-
-  // initialize the materials
-  glColor(RGB15(31, 31, 31));
-  glMaterialf(GL_AMBIENT,  RGB15(31, 31, 31));
-  glMaterialf(GL_DIFFUSE,  RGB15(31, 31, 31));
-  glMaterialf(GL_EMISSION, RGB15(31, 31, 31));
-  glMaterialf(GL_SPECULAR, ARGB16(1, 31, 31, 31));
-  glMaterialShinyness();
-
-  // allocate textures
-  for(u32 i = 0; i < sizeof(entries)/sizeof(entries[0]); i++) {
-    glGenTextures(1, &entries[i].texture);
-    glBindTexture(GL_TEXTURE_2D, entries[i].texture);
-    glTexImage2D(0, 0, GL_RGBA, TEXTURE_SIZE_256, TEXTURE_SIZE_16, 0, TEXGEN_TEXCOORD, NULL);
-    entries[i].entry = -1;
-    entries[i].selected = false;
-    entries[i].oldSelected = false;
-  }
-
   // reinitialize directory listing
   if(dirList != NULL)
     freescandir(dirList, numDirs);
-  redrawCwd();
 
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
@@ -128,8 +110,6 @@ void MainApp::OnActivate() {
 }
 
 void MainApp::OnDeactivate() {
-  // uninitialize 3D engine - this also deallocates the textures
-  glDeinit();
 }
 
 void MainApp::OnVBlank() {
@@ -140,7 +120,9 @@ void MainApp::OnVBlank() {
   word_t        repeat    = keysDownRepeat();
 
   // draw the scene ASAP
-  redraw();
+  if(cwdstr.stale) redrawCwd();
+  if(info.stale)   redrawInfo();
+  if(list.stale)   redrawList();
 
   if(down & KEY_TOUCH) {
     touchRead(&touch);
@@ -155,10 +137,8 @@ void MainApp::OnVBlank() {
         // update the selection
         if(selection != selected) {
           selected = selection;
-          needToRedrawInfo = true;
-          // refresh the 'selected' status for each texture
-          for(int i = 0; i < NUM_ENTRIES; i++)
-            entries[i].selected = entries[i].entry == selected;
+          info.stale = true;
+          list.stale = true;
         }
         else { // we have selected a selected direntry
           // open a directory
@@ -168,21 +148,17 @@ void MainApp::OnVBlank() {
 
             // move to the new directory
             chdir(directory);
-            redrawCwd();
 
             // scan the new directory
             numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
 
-            // reinitialize the texture entries
-            for(int i = 0; i < NUM_ENTRIES; i++) {
-              entries[i].entry = -1;
-              entries[i].selected = false;
-              entries[i].oldSelected = false;
-            }
-
             // reset the selected direntry and scroll
-            selected = -1;
-            scroll = 0;
+            selected     = -1;
+            scroll       = 0;
+            cwdstr.stale = true;
+            info.stale   = true;
+            list.stale   = true;
+            return;
           }
         }
       }
@@ -192,9 +168,11 @@ void MainApp::OnVBlank() {
   // update scroll
   if((repeat & KEY_DOWN) && scroll < numDirs - (192-8)/16) {
     scroll++;
+    list.stale = true;
   }
   else if((repeat & KEY_UP) && scroll > 0) {
     scroll--;
+    list.stale = true;
   }
 
   // check for exit
@@ -204,45 +182,30 @@ void MainApp::OnVBlank() {
   }
 }
 
-void MainApp::redraw() {
-  u32 offset;
-  int tex;
+void MainApp::redrawList() {
   surface_t surface = { NULL, 256, 16, 256, };
+
+  list.stale = false;
 
   // clear all the sprites
   oamClear(&oamMain, 0, 0);
   oamClear(&oamSub,  0, 0);
 
-  // update the textures
-  vramSetBankA(VRAM_A_LCD); // can only write to texture memory in LCD mode!
-  for(int i = 0; i < numDirs && i < NUM_ENTRIES-2; i++) {
-    // figure out which texture entry to use
-    offset = (scroll + i) % NUM_ENTRIES;
-    tex = entries[offset].texture;
+  // clear the list
+  dmaFillWords(Colors::Transparent, list.buf, list.size);
 
-    // this texture does not belong to this direntry or has just been selected/deselected
-    if(entries[offset].entry != scroll+i || entries[offset].selected != entries[offset].oldSelected) {
-      // update the direntry number
-      entries[offset].entry = scroll+i;
-
-      // clear the texture
-      dmaFillWords(0, glGetTexturePointer(tex), 256*16*sizeof(u16));
-
-      // draw blue if selected, black if not selected
-      surface.buffer = (color_t*)glGetTexturePointer(tex);
-      if(scroll+i == selected)
-        font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Blue, PrintTextFlags::AtBaseline);
-      else
-        font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Black, PrintTextFlags::AtBaseline);
-    }
-    // update the "previous" selection state
-    entries[offset].oldSelected = entries[offset].selected;
+  // update the list
+  for(int i = 0; i < numDirs && i < NUM_ENTRIES; i++) {
+    // draw blue if selected, black if not selected
+    surface.buffer = &list.buf[i*256*16 + 256*8];
+    if(scroll+i == selected)
+      font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Blue, PrintTextFlags::AtBaseline);
+    else
+      font->PrintText(&surface, 24, 16-4, dirList[scroll+i]->d_name, Colors::Black, PrintTextFlags::AtBaseline);
   }
-  vramSetBankA(VRAM_A_TEXTURE); // switch back to textured mode
 
-  // draw the graphics hooray!
-  glBegin(GL_QUADS);
-  for(int i = 0; i < numDirs && i < NUM_ENTRIES-2; i++) {
+  // draw the sprites
+  for(int i = 0; i < numDirs && i < NUM_ENTRIES; i++) {
     // this is a directory, give it a folder sprite!
     if(TYPE_DIR(dirList[scroll+i]->d_type)) {
       oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
@@ -258,45 +221,26 @@ void MainApp::redraw() {
       oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
              fileIcon.main, -1, false, false, false, false, false);
     }
-
-    // figure out which texture entry to use
-    offset = (scroll + i) % NUM_ENTRIES;
-    glBindTexture(GL_TEXTURE_2D, entries[offset].texture);
-
-    // draw a textured quad
-    glTexCoord2t16(inttot16(0), inttot16(0));
-    glVertex3v16(0, 8+16*i, 2);
-    glTexCoord2t16(inttot16(0), inttot16(16));
-    glVertex3v16(0, 8+16*i+16, 2);
-    glTexCoord2t16(inttot16(256), inttot16(16));
-    glVertex3v16(256, 8+16*i+16, 2);
-    glTexCoord2t16(inttot16(256), inttot16(0));
-    glVertex3v16(256, 8+16*i, 2);
-  }
-  glEnd();
-
-  // flush the 3D fifo
-  glFlush(0);
-
-  // redraw info about selection
-  if(needToRedrawInfo) {
-    needToRedrawInfo = false;
-    redrawInfo();
   }
 }
 
 void MainApp::redrawInfo() {
-  u16 *ptr = &topBmpBuf[256*16];
   struct stat statbuf;
   char str[1024];
-  surface_t surface = { ptr + 16, 256 - 16*2, 72, 256 };
+  surface_t surface = { info.buf + 16, 256 - 16*2, 72, 256 };
+
+  info.stale = false;
+
+  dmaFillHalfWords(Colors::Transparent, info.buf, info.size);
+
+  if(selected == -1)
+    return;
 
   stat(dirList[selected]->d_name, &statbuf);
 
-  dmaFillHalfWords(Colors::Transparent, ptr, 256*72*sizeof(u16));
   sprintf(str, "%s\n", dirList[selected]->d_name);
   if(!TYPE_DIR(dirList[selected]->d_type)) {
-    sprintf(str+strlen(str), "Size: ");
+    strcat(str, "File\nSize: "); // TODO: description
     if(statbuf.st_size < 1000)
       sprintf(str+strlen(str), "%u byte%c\n", statbuf.st_size, statbuf.st_size != 1 ? 's' : ' ');
     else if(statbuf.st_size < 10240)
@@ -315,20 +259,22 @@ void MainApp::redrawInfo() {
                            (statbuf.st_size%1048576)*10/1048576);
     else
       sprintf(str+strlen(str), "%u MB\n", statbuf.st_size/1048576);
-    sprintf(str+strlen(str), "File\n"); // TODO: description
-  }else{
-     strcat(str, "\nFolder");
   }
+  else if(strcmp("..", dirList[selected]->d_name) == 0)
+    strcat(str, "Parent Directory");
+  else
+    strcat(str, "Directory");
 
   font->PrintText(&surface, 0, 16-1, str, Colors::Black, PrintTextFlags::AtBaseline);
 }
 
 void MainApp::redrawCwd() {
-  u16 *ptr = &topBmpBuf[256*144];
-  surface_t surface = { ptr + 16, 256 - 16*2, 40, 256 };
+  surface_t surface = { cwdstr.buf + 16, 256 - 16*2, 40, 256 };
+
+  cwdstr.stale = false;
 
   getcwd(cwd, sizeof(cwd));
-  dmaFillHalfWords(Colors::Transparent, ptr, 256*40*sizeof(u16));
+  dmaFillHalfWords(Colors::Transparent, cwdstr.buf, cwdstr.size);
   font->PrintText(&surface, 0, 16-1, cwd, Colors::Black, PrintTextFlags::AtBaseline);
 }
 
