@@ -7,6 +7,7 @@
 #include "folder.h"
 #include "fx2.h"
 #include "appicon.h"
+#include "topbg.h"
 #include <feos3d.h>
 #include <sys/stat.h>
 
@@ -27,6 +28,7 @@ MainApp::MainApp() {
   numDirs  = 0;
   selected = -1;
   scroll   = 0;
+  needToRedrawInfo = false;
 }
 
 MainApp::~MainApp() {
@@ -42,8 +44,21 @@ void MainApp::OnActivate() {
   videoSetMode   (MODE_0_3D);
   videoSetModeSub(MODE_3_2D);
   vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_MAIN_SPRITE, VRAM_C_SUB_BG, VRAM_D_SUB_SPRITE);
+  BG_PALETTE[0] = COLOR_UIBACKDROP;
 
-  bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+  // initialize top screen
+  int topFontBg = bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 2, 0);
+  int topUIBg = bgInitSub(2, BgType_Text8bpp, BgSize_T_256x256, 0, 1);
+
+  // clear top screen bitmap
+  topBmpBuf = bgGetGfxPtr(topFontBg);
+  dmaFillHalfWords(Colors::Transparent, topBmpBuf, 256*192*sizeof(u16));
+
+  // load top screen tiled background
+  bgSetPriority(topUIBg, 3);
+  dmaCopy(topbgTiles, bgGetGfxPtr(topUIBg), topbgTilesLen);
+  dmaCopy(topbgMap,   bgGetMapPtr(topUIBg), topbgMapLen);
+  dmaCopy(topbgPal,   BG_PALETTE_SUB,       topbgPalLen);
 
   // initialize OAM
   oamInit(&oamMain, SpriteMapping_Bmp_1D_128, false);
@@ -69,7 +84,7 @@ void MainApp::OnActivate() {
   // initialize 3D engine
   glInit();
   glEnable(GL_TEXTURE_2D|GL_BLEND);
-  glClearColor(31, 31, 31, 31);
+  glClearColor(31, 31, 31, 0);
   glClearPolyID(63);
   glClearDepth(GL_MAX_DEPTH);
 
@@ -103,9 +118,7 @@ void MainApp::OnActivate() {
   // reinitialize directory listing
   if(dirList != NULL)
     freescandir(dirList, numDirs);
-  getcwd(cwd, sizeof(cwd));
-  dmaFillHalfWords(Colors::White, bgGetGfxPtr(7), 256*256*sizeof(u16));
-  font->PrintText(bgGetGfxPtr(7), 0, 16-4, cwd, Colors::Black, PrintTextFlags::AtBaseline);
+  redrawCwd();
 
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
@@ -115,11 +128,7 @@ void MainApp::OnActivate() {
 }
 
 void MainApp::OnDeactivate() {
-  // deallocate textures
-  for(int i = 0; i < NUM_ENTRIES; i++)
-    glDeleteTextures(1, &entries[i].texture);
-
-  // uninitialize 3D engine
+  // uninitialize 3D engine - this also deallocates the textures
   glDeinit();
 }
 
@@ -145,39 +154,8 @@ void MainApp::OnVBlank() {
 
         // update the selection
         if(selection != selected) {
-          u16 *ptr = &(bgGetGfxPtr(7)[256*16]);
-          struct stat statbuf;
-          char str[1024];
-          surface_t surface = { ptr + 24, 256 - 24, 256-16, 256, };
-
           selected = selection;
-          stat(dirList[selected]->d_name, &statbuf);
-
-          dmaFillHalfWords(Colors::White, ptr, 256*(256-16)*sizeof(u16));
-          sprintf(str, "%s\n", dirList[selected]->d_name);
-          if(!TYPE_DIR(dirList[selected]->d_type)) {
-            sprintf(str+strlen(str), "Size: ");
-            if(statbuf.st_size < 1000)
-              sprintf(str+strlen(str), "%u\n", statbuf.st_size);
-            else if(statbuf.st_size < 10240)
-              sprintf(str+strlen(str), "%u.%02uKB\n", statbuf.st_size/1024,
-                                   (statbuf.st_size%1024)*100/1024);
-            else if(statbuf.st_size < 102400)
-              sprintf(str+strlen(str), "%u.%01uKB\n", statbuf.st_size/1024,
-                                   (statbuf.st_size%1024)*10/1024);
-            else if(statbuf.st_size < 1000000)
-              sprintf(str+strlen(str), "%uKB\n", statbuf.st_size/1024);
-            else if(statbuf.st_size < 10485760)
-              sprintf(str+strlen(str), "%u.%02uMB\n", statbuf.st_size/1048576,
-                                   (statbuf.st_size%1048576)*100/1048576);
-            else if(statbuf.st_size < 104857600)
-              sprintf(str+strlen(str), "%u.%01uMB\n", statbuf.st_size/1048576,
-                                   (statbuf.st_size%1048576)*10/1048576);
-            else
-              sprintf(str+strlen(str), "%uMB\n", statbuf.st_size/1048576);
-          }
-
-          font->PrintText(&surface, 0, 16-4, str, Colors::Blue, PrintTextFlags::AtBaseline);
+          needToRedrawInfo = true;
           // refresh the 'selected' status for each texture
           for(int i = 0; i < NUM_ENTRIES; i++)
             entries[i].selected = entries[i].entry == selected;
@@ -190,9 +168,7 @@ void MainApp::OnVBlank() {
 
             // move to the new directory
             chdir(directory);
-            getcwd(cwd, sizeof(cwd));
-            dmaFillHalfWords(Colors::White, bgGetGfxPtr(7), 256*256*sizeof(u16));
-            font->PrintText(bgGetGfxPtr(7), 0, 16-4, cwd, Colors::Black, PrintTextFlags::AtBaseline);
+            redrawCwd();
 
             // scan the new directory
             numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
@@ -301,6 +277,59 @@ void MainApp::redraw() {
 
   // flush the 3D fifo
   glFlush(0);
+
+  // redraw info about selection
+  if(needToRedrawInfo) {
+    needToRedrawInfo = false;
+    redrawInfo();
+  }
+}
+
+void MainApp::redrawInfo() {
+  u16 *ptr = &topBmpBuf[256*16];
+  struct stat statbuf;
+  char str[1024];
+  surface_t surface = { ptr + 16, 256 - 16*2, 72, 256 };
+
+  stat(dirList[selected]->d_name, &statbuf);
+
+  dmaFillHalfWords(Colors::Transparent, ptr, 256*72*sizeof(u16));
+  sprintf(str, "%s\n", dirList[selected]->d_name);
+  if(!TYPE_DIR(dirList[selected]->d_type)) {
+    sprintf(str+strlen(str), "Size: ");
+    if(statbuf.st_size < 1000)
+      sprintf(str+strlen(str), "%u byte%c\n", statbuf.st_size, statbuf.st_size != 1 ? 's' : ' ');
+    else if(statbuf.st_size < 10240)
+      sprintf(str+strlen(str), "%u.%02u KB\n", statbuf.st_size/1024,
+                           (statbuf.st_size%1024)*100/1024);
+    else if(statbuf.st_size < 102400)
+      sprintf(str+strlen(str), "%u.%01u KB\n", statbuf.st_size/1024,
+                           (statbuf.st_size%1024)*10/1024);
+    else if(statbuf.st_size < 1000000)
+      sprintf(str+strlen(str), "%u KB\n", statbuf.st_size/1024);
+    else if(statbuf.st_size < 10485760)
+      sprintf(str+strlen(str), "%u.%02u MB\n", statbuf.st_size/1048576,
+                           (statbuf.st_size%1048576)*100/1048576);
+    else if(statbuf.st_size < 104857600)
+      sprintf(str+strlen(str), "%u.%01u MB\n", statbuf.st_size/1048576,
+                           (statbuf.st_size%1048576)*10/1048576);
+    else
+      sprintf(str+strlen(str), "%u MB\n", statbuf.st_size/1048576);
+    sprintf(str+strlen(str), "File\n"); // TODO: description
+  }else{
+     strcat(str, "\nFolder");
+  }
+
+  font->PrintText(&surface, 0, 16-1, str, Colors::Black, PrintTextFlags::AtBaseline);
+}
+
+void MainApp::redrawCwd() {
+  u16 *ptr = &topBmpBuf[256*144];
+  surface_t surface = { ptr + 16, 256 - 16*2, 40, 256 };
+
+  getcwd(cwd, sizeof(cwd));
+  dmaFillHalfWords(Colors::Transparent, ptr, 256*40*sizeof(u16));
+  font->PrintText(&surface, 0, 16-1, cwd, Colors::Black, PrintTextFlags::AtBaseline);
 }
 
 int main() {
