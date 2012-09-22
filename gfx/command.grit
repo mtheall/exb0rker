@@ -1,0 +1,14 @@
+gfx/copy.png
+gfx/cut.png
+gfx/delete.png
+gfx/no.png
+gfx/paste.png
+gfx/rename.png
+gfx/topbg.png
+gfx/yes.png
+
+-g -gt -gB8 -gT7FFE
+-m!
+-p -pS
+
+-S command
