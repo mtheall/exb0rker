@@ -1,10 +1,12 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <errno.h>
 #include "scandir.h"
 #include "mainapp.h"
 #include "gfx.h"
-#include <sys/stat.h>
 
 IGuiManager* g_guiManager;
 
@@ -241,7 +243,6 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
             strcpy(file, cwd);
             strcat(file, dirList[selected]->d_name);
             command = COMMAND_COPY;
-            fprintf(stderr, "Copy %s\n", file);
           }
           break;
         case COMMAND_CUT:
@@ -249,27 +250,26 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
             strcpy(file, cwd);
             strcat(file, dirList[selected]->d_name);
             command = COMMAND_CUT;
-            fprintf(stderr, "Cut %s\n", file);
           }
           break;
         case COMMAND_PASTE:
           if(command == COMMAND_COPY) {
-            fprintf(stderr, "Copy %s, Paste into %s\n", file, cwd);
             command = COMMAND_NONE;
+            Copy();
           }
           if(command == COMMAND_CUT) {
-            fprintf(stderr, "Cut %s, Paste into %s\n", file, cwd);
             command = COMMAND_NONE;
+            Move();
           }
           break;
         case COMMAND_RENAME:
           if(selected != -1 && strcmp("..", dirList[selected]->d_name) != 0) {
-            fprintf(stderr, "Rename %s\n", dirList[selected]->d_name);
+            Rename();
           }
           break;
         case COMMAND_DELETE:
           if(selected != -1 && strcmp("..", dirList[selected]->d_name) != 0) {
-            fprintf(stderr, "Delete %s\n", dirList[selected]->d_name);
+            Delete();
           }
           break;
         default:
@@ -387,6 +387,153 @@ void MainApp::redrawCwd() {
   getcwd(cwd, sizeof(cwd));
   dmaFillHalfWords(Colors::Transparent, cwdstr.buf, cwdstr.size);
   font->PrintText(&surface, 0, 16-1, cwd, Colors::Black, PrintTextFlags::AtBaseline);
+}
+
+// Commands
+static char buf[4096];
+#define YES_X (256 - 16*3)
+#define YES_Y (128)
+#define NO_X  (YES_X + 16)
+#define NO_Y  YES_Y
+
+void MainApp::Copy() {
+  int down;
+  touchPosition touch;
+  enum { NONE, YES, NO, } choice = NONE;
+  surface_t surface = { &bgGetGfxPtr(7)[256*90] + 16, 256 - 16*2, 48, 256, };
+
+  // print status message
+  oamClear(&oamSub, 0, 0);
+  strcpy(buf, "This operation is not implemented yet.");
+  font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
+  oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+    icons[ICON_YES].sub, -1, false, false, false, false, false);
+
+  // wait for user to accept the status
+  choice = NONE;
+  do {
+    swiWaitForVBlank();
+    down = keysDown();
+
+    if(down & KEY_TOUCH) {
+      touchRead(&touch);
+      if(touch.px > YES_X && touch.px < YES_X + 16 &&
+         touch.py > YES_Y && touch.py < YES_Y + 16)
+        choice = YES;
+    }
+    else if(down & (KEY_A|KEY_B))
+      choice = YES;
+  } while(choice == NONE);
+
+  // clear the dialog
+  dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
+
+  // set up the command sprites
+  oamClear(&oamSub, 0, 0);
+  for(int i = ICON_COPY; i <= ICON_DELETE; i++)
+    oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+      icons[i].sub, -1, false, false, false, false, false);
+}
+
+void MainApp::Move() {
+  Copy();
+}
+
+void MainApp::Delete() {
+  touchPosition touch;
+  int rc;
+  int down;
+  enum { NONE, YES, NO, } choice = NONE;
+  surface_t surface = { &bgGetGfxPtr(7)[256*90] + 16, 256 - 16*2, 48, 256, };
+
+  // print confirmation dialog
+  sprintf(buf, "Delete %s?", dirList[selected]->d_name);
+  font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
+
+  // replace sprites with YES/NO icons
+  oamClear(&oamSub, 0, 0);
+  oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+    icons[ICON_YES].sub, -1, false, false, false, false, false);
+  oamSet(&oamSub, 1, NO_X,  NO_Y,  0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+    icons[ICON_NO].sub, -1, false, false, false, false, false);
+
+  // wait for the input
+  do {
+    swiWaitForVBlank();
+    down = keysDown();
+
+    if(down & KEY_TOUCH) {
+      touchRead(&touch);
+      if(touch.px > YES_X && touch.px < YES_X + 16 &&
+         touch.py > YES_Y && touch.py < YES_Y + 16)
+        choice = YES;
+      else if(touch.px > NO_X && touch.px < NO_X + 16 &&
+              touch.py > NO_Y && touch.py < NO_Y + 16)
+        choice = NO;
+    }
+    else if(down & KEY_A)
+      choice = YES;
+    else if(down & KEY_B)
+      choice = NO;
+  } while(choice == NONE);
+
+  // clear the dialog
+  dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
+  oamClear(&oamSub, 0, 0);
+
+  // delete if choice was YES
+  if(choice == YES) {
+    // TODO: recursive delete for directories
+    rc = remove(dirList[selected]->d_name);
+    if(rc == -1)
+      sprintf(buf, "Failed to delete %s: %s", dirList[selected]->d_name, strerror(errno));
+    else {
+      sprintf(buf, "Successfully deleted %s", dirList[selected]->d_name);
+
+      // hack to prevent another scandir!
+      // free the dirent
+      free(dirList[selected]);
+      // slide everything after it 1 space down (if it's not the last entry)
+      if(selected != numDirs-1)
+        memmove(&dirList[selected], &dirList[selected+1], (numDirs-selected-1)*sizeof(struct dirent *));
+      // decrement the dirlist counter
+      numDirs--;
+      // list needs to be updated
+      list.stale = true;
+      // we just deleted the selected entry!
+      selected = -1;
+      info.stale = true;
+    }
+
+    // print status message
+    font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
+    oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+      icons[ICON_YES].sub, -1, false, false, false, false, false);
+
+    // wait for user to accept the status
+    choice = NONE;
+    do {
+      swiWaitForVBlank();
+      down = keysDown();
+
+      if(down & KEY_TOUCH) {
+        touchRead(&touch);
+        if(touch.px > YES_X && touch.px < YES_X + 16 &&
+           touch.py > YES_Y && touch.py < YES_Y + 16)
+          choice = YES;
+      }
+      else if(down & (KEY_A|KEY_B))
+        choice = YES;
+    } while(choice == NONE);
+
+    // clear the dialog
+    dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
+    oamClear(&oamSub, 0, 0);
+  }
+}
+
+void MainApp::Rename() {
+  Copy();
 }
 
 int main() {

@@ -41,6 +41,10 @@ private:
   void redrawList();
   void processMainScreen(touchPosition &touch, int down, int repeat);
   void processSubScreen(touchPosition &touch, int down, int repeat);
+  void Copy();
+  void Move();
+  void Delete();
+  void Rename();
 
 public:
   MainApp();
