@@ -20,6 +20,15 @@ typedef enum {
   COMMAND_DELETE,
 } command_t;
 
+typedef enum {
+  STATE_PROCESS_MAIN = 0,
+  STATE_PROCESS_SUB,
+  STATE_COPY,
+  STATE_MOVE,
+  STATE_DELETE,
+  STATE_RENAME,
+} state_t;
+
 // Main application class
 class MainApp : public CApplication {
 private:
@@ -30,21 +39,23 @@ private:
   int           numDirs;
   int           selected;
   int           scroll;
+  int           statusTimer;
   canvas_t      cwdstr;
   canvas_t      info;
   canvas_t      list;
-  bool          swapped;
+  canvas_t      status;
   command_t     command;
+  state_t       state;
 
   void redrawCwd();
   void redrawInfo();
   void redrawList();
   void processMainScreen(touchPosition &touch, int down, int repeat);
   void processSubScreen(touchPosition &touch, int down, int repeat);
-  void Copy();
-  void Move();
-  void Delete();
-  void Rename();
+  void Copy(touchPosition &touch, int down, int repeat);
+  void Move(touchPosition &touch, int down, int repeat);
+  void Delete(touchPosition &touch, int down, int repeat);
+  void Rename(touchPosition &touch, int down, int repeat);
 
 public:
   MainApp();

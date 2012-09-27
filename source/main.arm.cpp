@@ -45,15 +45,16 @@ static icon_t icons[] = {
 MainApp::MainApp() {
   SetTitle("FeOS File Manager");
   SetIcon((color_t*)appiconBitmap);
-  dirList    = NULL;
-  numDirs    =  0;
-  selected   = -1;
-  scroll     =  0;
+  dirList     = NULL;
+  numDirs     =  0;
+  selected    = -1;
+  scroll      =  0;
+  statusTimer =  0;
   memset(&cwdstr, 0, sizeof(cwdstr));
   memset(&info,   0, sizeof(info));
   memset(&list,   0, sizeof(list));
-  swapped = false;
   command = COMMAND_NONE;
+  state = STATE_PROCESS_MAIN;
 }
 
 MainApp::~MainApp() {
@@ -88,6 +89,9 @@ void MainApp::OnActivate() {
   list.buf     = bgGetGfxPtr(botfb);
   list.size    = 256*192*sizeof(u16);
   list.stale   = true;
+  status.buf   = &bgGetGfxPtr(topfb)[256*90];
+  status.size  = 256*40*sizeof(u16);
+  status.stale = false;
 
   // clear framebuffers
   dmaFillHalfWords(Colors::Transparent, bgGetGfxPtr(topfb), 256*192*sizeof(u16));
@@ -139,27 +143,46 @@ void MainApp::OnDeactivate() {
 
 void MainApp::OnVBlank() {
   touchPosition touch;
-  word_t        down      = keysDown();
-  word_t        repeat    = keysDownRepeat();
+  word_t        down   = keysDown();
+  word_t        repeat = keysDownRepeat();
+
+  if(down & KEY_TOUCH)
+    touchRead(&touch);
 
   // draw the scene ASAP
   if(cwdstr.stale) redrawCwd();
   if(info.stale)   redrawInfo();
   if(list.stale)   redrawList();
 
-  if(down & KEY_TOUCH)
-    touchRead(&touch);
-
-  if(down & KEY_START)
-    swapped = !swapped;
-
-  if(swapped) {
-    lcdMainOnTop();
-    processSubScreen(touch, down, repeat);
+  if(statusTimer > 0) {
+    statusTimer--;
+    if(statusTimer == 0)
+      dmaFillHalfWords(0, status.buf, status.size);
   }
-  else {
-    lcdMainOnBottom();
-    processMainScreen(touch, down, repeat);
+
+  oamClear(&oamSub, 1, 7);
+
+  switch(state) {
+    case STATE_PROCESS_MAIN:
+      lcdMainOnBottom();
+      processMainScreen(touch, down, repeat);
+      break;
+    case STATE_PROCESS_SUB:
+      lcdMainOnTop();
+      processSubScreen(touch, down, repeat);
+      break;
+    case STATE_COPY:
+      Copy(touch, down, repeat);
+      break;
+    case STATE_MOVE:
+      Move(touch, down, repeat);
+      break;
+    case STATE_DELETE:
+      Delete(touch, down, repeat);
+      break;
+    case STATE_RENAME:
+      Rename(touch, down, repeat);
+      break;
   }
 
   // update scroll
@@ -182,6 +205,11 @@ void MainApp::OnVBlank() {
 void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
   char directory[256];
   int  selection = -1;
+
+  if(down & KEY_START) {
+    state = STATE_PROCESS_SUB;
+    return;
+  }
 
   if(down & KEY_TOUCH) {
     if(dirList != NULL) {
@@ -232,6 +260,16 @@ void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
 void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
   command_t cmd = COMMAND_NONE;
 
+  if(down & KEY_START) {
+    state = STATE_PROCESS_MAIN;
+    return;
+  }
+
+  // set up the command sprites
+  for(int i = ICON_COPY; i <= ICON_DELETE; i++)
+    oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+      icons[i].sub, -1, false, false, false, false, false);
+
   for(int i = ICON_COPY; cmd == COMMAND_NONE && i <= ICON_DELETE; i++) {
     if(touch.px > i*24 + 8 && touch.px < (i+1)*24 &&
        touch.py > 128      && touch.py < 128+16) {
@@ -255,21 +293,21 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
         case COMMAND_PASTE:
           if(command == COMMAND_COPY) {
             command = COMMAND_NONE;
-            Copy();
+            state = STATE_COPY;
           }
           if(command == COMMAND_CUT) {
             command = COMMAND_NONE;
-            Move();
+            state = STATE_MOVE;
           }
           break;
         case COMMAND_RENAME:
           if(selected != -1 && strcmp("..", dirList[selected]->d_name) != 0) {
-            Rename();
+            state = STATE_RENAME;
           }
           break;
         case COMMAND_DELETE:
           if(selected != -1 && strcmp("..", dirList[selected]->d_name) != 0) {
-            Delete();
+            state = STATE_DELETE;
           }
           break;
         default:
@@ -285,7 +323,7 @@ void MainApp::redrawList() {
   list.stale = false;
 
   // clear all the sprites
-  oamClear(&oamMain, 0, 0);
+  oamClear(&oamMain, 0, 11);
 
   // clear the list
   dmaFillWords(Colors::Transparent, list.buf, list.size);
@@ -328,13 +366,7 @@ void MainApp::redrawInfo() {
   info.stale = false;
 
   // clear the graphics
-  oamClear(&oamSub,  0, 0);
   dmaFillHalfWords(Colors::Transparent, info.buf, info.size);
-
-  // set up the command sprites
-  for(int i = ICON_COPY; i <= ICON_DELETE; i++)
-    oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
-      icons[i].sub, -1, false, false, false, false, false);
 
   if(selected == -1)
     return;
@@ -396,90 +428,58 @@ static char buf[4096];
 #define NO_X  (YES_X + 16)
 #define NO_Y  YES_Y
 
-void MainApp::Copy() {
-  int down;
-  touchPosition touch;
-  enum { NONE, YES, NO, } choice = NONE;
-  surface_t surface = { &bgGetGfxPtr(7)[256*90] + 16, 256 - 16*2, 48, 256, };
+void MainApp::Copy(touchPosition &touch, int down, int repeat) {
+  surface_t surface = { status.buf + 16, 256 - 16*2, 48, 256, };
 
   // print status message
-  oamClear(&oamSub, 0, 0);
+  dmaFillHalfWords(Colors::Transparent, status.buf, status.size);
   strcpy(buf, "This operation is not implemented yet.");
   font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
-  oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
-    icons[ICON_YES].sub, -1, false, false, false, false, false);
-
-  // wait for user to accept the status
-  choice = NONE;
-  do {
-    swiWaitForVBlank();
-    down = keysDown();
-
-    if(down & KEY_TOUCH) {
-      touchRead(&touch);
-      if(touch.px > YES_X && touch.px < YES_X + 16 &&
-         touch.py > YES_Y && touch.py < YES_Y + 16)
-        choice = YES;
-    }
-    else if(down & (KEY_A|KEY_B))
-      choice = YES;
-  } while(choice == NONE);
-
-  // clear the dialog
-  dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
-
-  // set up the command sprites
-  oamClear(&oamSub, 0, 0);
-  for(int i = ICON_COPY; i <= ICON_DELETE; i++)
-    oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
-      icons[i].sub, -1, false, false, false, false, false);
+  statusTimer = 180;
+  state = STATE_PROCESS_MAIN;
 }
 
-void MainApp::Move() {
-  Copy();
+void MainApp::Move(touchPosition &touch, int down, int repeat) {
+  Copy(touch, down, repeat);
 }
 
-void MainApp::Delete() {
-  touchPosition touch;
+void MainApp::Delete(touchPosition &touch, int down, int repeat) {
   int rc;
-  int down;
   enum { NONE, YES, NO, } choice = NONE;
-  surface_t surface = { &bgGetGfxPtr(7)[256*90] + 16, 256 - 16*2, 48, 256, };
+  surface_t surface = { status.buf + 16, 256 - 16*2, 48, 256, };
 
   // print confirmation dialog
+  dmaFillHalfWords(Colors::Transparent, status.buf, status.size);
   sprintf(buf, "Delete %s?", dirList[selected]->d_name);
   font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
+  statusTimer = 0;
 
   // replace sprites with YES/NO icons
-  oamClear(&oamSub, 0, 0);
   oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
     icons[ICON_YES].sub, -1, false, false, false, false, false);
   oamSet(&oamSub, 1, NO_X,  NO_Y,  0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
     icons[ICON_NO].sub, -1, false, false, false, false, false);
 
-  // wait for the input
-  do {
-    swiWaitForVBlank();
-    down = keysDown();
-
-    if(down & KEY_TOUCH) {
-      touchRead(&touch);
-      if(touch.px > YES_X && touch.px < YES_X + 16 &&
-         touch.py > YES_Y && touch.py < YES_Y + 16)
-        choice = YES;
-      else if(touch.px > NO_X && touch.px < NO_X + 16 &&
-              touch.py > NO_Y && touch.py < NO_Y + 16)
-        choice = NO;
-    }
-    else if(down & KEY_A)
+  // check for the input
+  if(down & KEY_TOUCH) {
+    touchRead(&touch);
+    if(touch.px > YES_X && touch.px < YES_X + 16 &&
+       touch.py > YES_Y && touch.py < YES_Y + 16)
       choice = YES;
-    else if(down & KEY_B)
+    else if(touch.px > NO_X && touch.px < NO_X + 16 &&
+            touch.py > NO_Y && touch.py < NO_Y + 16)
       choice = NO;
-  } while(choice == NONE);
+  }
+  else if(down & KEY_A)
+    choice = YES;
+  else if(down & KEY_B)
+    choice = NO;
+
+  if(choice == NONE)
+    return;
 
   // clear the dialog
-  dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
-  oamClear(&oamSub, 0, 0);
+  dmaFillHalfWords(Colors::Transparent, status.buf, status.size);
 
   // delete if choice was YES
   if(choice == YES) {
@@ -507,33 +507,14 @@ void MainApp::Delete() {
 
     // print status message
     font->PrintText(&surface, 0, 16-4, buf, Colors::Black, PrintTextFlags::AtBaseline);
-    oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
-      icons[ICON_YES].sub, -1, false, false, false, false, false);
-
-    // wait for user to accept the status
-    choice = NONE;
-    do {
-      swiWaitForVBlank();
-      down = keysDown();
-
-      if(down & KEY_TOUCH) {
-        touchRead(&touch);
-        if(touch.px > YES_X && touch.px < YES_X + 16 &&
-           touch.py > YES_Y && touch.py < YES_Y + 16)
-          choice = YES;
-      }
-      else if(down & (KEY_A|KEY_B))
-        choice = YES;
-    } while(choice == NONE);
-
-    // clear the dialog
-    dmaFillHalfWords(Colors::Transparent, surface.buffer, 256*48*sizeof(u16));
-    oamClear(&oamSub, 0, 0);
+    statusTimer = 180;
   }
+
+  state = STATE_PROCESS_MAIN;
 }
 
-void MainApp::Rename() {
-  Copy();
+void MainApp::Rename(touchPosition &touch, int down, int repeat) {
+  Copy(touch, down, repeat);
 }
 
 int main() {
