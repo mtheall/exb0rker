@@ -90,7 +90,7 @@ void MainApp::OnActivate() {
   list.size    = 256*192*sizeof(u16);
   list.stale   = true;
   status.buf   = &bgGetGfxPtr(topfb)[256*90];
-  status.size  = 256*40*sizeof(u16);
+  status.size  = 256*48*sizeof(u16);
   status.stale = false;
 
   // clear framebuffers
