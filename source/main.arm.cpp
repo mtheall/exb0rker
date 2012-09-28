@@ -134,6 +134,7 @@ void MainApp::OnActivate() {
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
   scroll   = 0;
+  oamClear(&oamSub, 0, 1);
 
   keysSetRepeat(15, 4);
 }
@@ -455,9 +456,9 @@ void MainApp::Delete(touchPosition &touch, int down, int repeat) {
   statusTimer = 0;
 
   // replace sprites with YES/NO icons
-  oamSet(&oamSub, 0, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+  oamSet(&oamSub, 1, YES_X, YES_Y, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
     icons[ICON_YES].sub, -1, false, false, false, false, false);
-  oamSet(&oamSub, 1, NO_X,  NO_Y,  0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+  oamSet(&oamSub, 2, NO_X,  NO_Y,  0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
     icons[ICON_NO].sub, -1, false, false, false, false, false);
 
   // check for the input
@@ -503,6 +504,7 @@ void MainApp::Delete(touchPosition &touch, int down, int repeat) {
       // we just deleted the selected entry!
       selected = -1;
       info.stale = true;
+      oamClear(&oamSub, 0, 1);
     }
 
     // print status message
