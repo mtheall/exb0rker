@@ -212,6 +212,13 @@ void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
     return;
   }
 
+  // set up the command sprites
+  if(selected != -1) {
+    for(int i = ICON_COPY; i <= ICON_DELETE; i++)
+      oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+        icons[i].sub, -1, false, false, false, false, false);
+  }
+
   if(down & KEY_TOUCH) {
     if(dirList != NULL) {
       if((touch.py-8)/16 + scroll < numDirs
@@ -267,9 +274,11 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
   }
 
   // set up the command sprites
-  for(int i = ICON_COPY; i <= ICON_DELETE; i++)
-    oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
-      icons[i].sub, -1, false, false, false, false, false);
+  if(selected != -1) {
+    for(int i = ICON_COPY; i <= ICON_DELETE; i++)
+      oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+        icons[i].sub, -1, false, false, false, false, false);
+  }
 
   for(int i = ICON_COPY; cmd == COMMAND_NONE && i <= ICON_DELETE; i++) {
     if(touch.px > i*24 + 8 && touch.px < (i+1)*24 &&
