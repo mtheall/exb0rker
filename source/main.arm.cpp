@@ -259,6 +259,12 @@ void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
             list.stale   = true;
             return;
           }
+          else {
+            char tmpBuf[256];
+            getcwd(tmpBuf, sizeof(tmpBuf));
+            strncat(tmpBuf, dirList[selected]->d_name, sizeof(tmpBuf));
+            g_guiManager->OpenFile(tmpBuf);
+          }
         }
       }
     }
@@ -393,7 +399,9 @@ void MainApp::redrawInfo() {
     else
       oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
              icons[ICON_FILE].sub, -1, false, false, false, false, false);
-    strcat(str, "File\nSize: "); // TODO: description
+    int tmpLen = strlen(str);
+    g_guiManager->GetFileDescription(dirList[selected]->d_name, str + tmpLen, sizeof(str)-tmpLen);
+    strncat(str, "\nSize: ", sizeof(str));
     if(statbuf.st_size < 1000)
       sprintf(str+strlen(str), "%u byte%c\n", statbuf.st_size, statbuf.st_size != 1 ? 's' : ' ');
     else if(statbuf.st_size < 10240)
@@ -529,9 +537,9 @@ void MainApp::Rename(touchPosition &touch, int down, int repeat) {
 }
 
 int main() {
-  MainApp *app = new MainApp();
-
   g_guiManager = GetGuiManagerChecked();
+
+  MainApp *app = new MainApp();
   g_guiManager->RunApplication(app);
 
   delete app;
