@@ -46,6 +46,7 @@ private:
   canvas_t      status;
   command_t     command;
   state_t       state;
+  FileIconPtr   *pIcons;
 
   void redrawCwd();
   void redrawInfo();
@@ -56,6 +57,7 @@ private:
   void Move(touchPosition &touch, int down, int repeat);
   void Delete(touchPosition &touch, int down, int repeat);
   void Rename(touchPosition &touch, int down, int repeat);
+  void loadIcons();
 
 public:
   MainApp();

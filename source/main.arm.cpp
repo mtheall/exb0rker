@@ -16,22 +16,21 @@ typedef struct {
 } icon_t;
 
 enum {
-  ICON_FILE = 0,
-  ICON_FOLDER,
-  ICON_FX2,
-  ICON_COPY,
+  ICON_COPY = 0,
   ICON_CUT,
   ICON_PASTE,
   ICON_RENAME,
   ICON_DELETE,
   ICON_NO,
   ICON_YES,
+
+  NUM_HARDCODED_ICONS,
+  FIRST_FILE_ICON = NUM_HARDCODED_ICONS,
+  LAST_FILE_ICON = FIRST_FILE_ICON + NUM_ENTRIES - 1,
+  NUM_ICONS
 };
 
-static icon_t icons[] = {
-  [ICON_FILE]   = { (u16*)fileBitmap,   NULL, NULL, fileBitmapLen,   },
-  [ICON_FOLDER] = { (u16*)folderBitmap, NULL, NULL, folderBitmapLen, },
-  [ICON_FX2]    = { (u16*)fx2Bitmap,    NULL, NULL, fx2BitmapLen,    },
+static icon_t icons[NUM_ICONS] = {
   [ICON_COPY]   = { (u16*)copyTiles,    NULL, NULL, copyTilesLen,    },
   [ICON_CUT]    = { (u16*)cutTiles,     NULL, NULL, cutTilesLen,     },
   [ICON_PASTE]  = { (u16*)pasteTiles,   NULL, NULL, pasteTilesLen,   },
@@ -40,7 +39,6 @@ static icon_t icons[] = {
   [ICON_NO]     = { (u16*)noTiles,      NULL, NULL, noTilesLen,      },
   [ICON_YES]    = { (u16*)yesTiles,     NULL, NULL, yesTilesLen,     },
 };
-#define NUM_ICONS (sizeof(icons)/sizeof(icons[0]))
 
 MainApp::MainApp() {
   SetTitle("FeOS File Manager");
@@ -55,11 +53,15 @@ MainApp::MainApp() {
   memset(&list,   0, sizeof(list));
   command = COMMAND_NONE;
   state = STATE_PROCESS_MAIN;
+  pIcons = NULL;
 }
 
 MainApp::~MainApp() {
   if(dirList != NULL)
+  {
     freescandir(dirList, numDirs);
+    delete [] pIcons;
+  }
 }
 
 void MainApp::OnActivate() {
@@ -114,29 +116,35 @@ void MainApp::OnActivate() {
   dmaCopy(commandPal, SPRITE_PALETTE_SUB, commandPalLen);
 
   // allocate sprites for icons
-  for(int i = ICON_FILE; i <= ICON_FX2; i++) {
-    if(icons[i].main == NULL) icons[i].main = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
-    if(icons[i].sub  == NULL) icons[i].sub  = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_Bmp);
+  for (int i = 0; i < NUM_ICONS; i ++) {
+    if (i < NUM_HARDCODED_ICONS) {
+      icons[i].sub = oamAllocateGfx(&oamSub, SpriteSize_16x16, SpriteColorFormat_256Color);
+      // copy the sprite into vram
+      dmaCopy(icons[i].src, icons[i].sub, icons[i].len);
+	} else
+      icons[i].main = oamAllocateGfx(&oamMain, SpriteSize_16x16, SpriteColorFormat_Bmp);
   }
-  for(int i = ICON_COPY; i <= ICON_YES; i++)
-    if(icons[i].sub  == NULL) icons[i].sub  = oamAllocateGfx(&oamSub,  SpriteSize_16x16, SpriteColorFormat_256Color);
-
-  // copy sprites into vram
-  for(unsigned int i = 0; i < NUM_ICONS; i++) {
-    if(icons[i].main != NULL) dmaCopy(icons[i].src, icons[i].main, icons[i].len);
-    if(icons[i].sub  != NULL) dmaCopy(icons[i].src, icons[i].sub,  icons[i].len);
-  }
+  icons[FIRST_FILE_ICON].sub = oamAllocateGfx(&oamSub, SpriteSize_16x16, SpriteColorFormat_Bmp);
 
   // reinitialize directory listing
-  if(dirList != NULL)
+  if(dirList != NULL) {
     freescandir(dirList, numDirs);
+    delete [] pIcons;
+  }
 
   numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
   selected = -1;
   scroll   = 0;
+  loadIcons();
   oamClear(&oamSub, 0, 1);
 
   keysSetRepeat(15, 4);
+}
+
+void MainApp::loadIcons() {
+  pIcons = new FileIconPtr[numDirs];
+  for (int i = 0; i < numDirs; i ++)
+    pIcons[i] = g_guiManager->GetFileIcon(dirList[i]->d_name);
 }
 
 void MainApp::OnDeactivate() {
@@ -215,7 +223,7 @@ void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
   // set up the command sprites
   if(selected != -1) {
     for(int i = ICON_COPY; i <= ICON_DELETE; i++)
-      oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+      oamSet(&oamSub, i+2, (i+2)*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
         icons[i].sub, -1, false, false, false, false, false);
   }
 
@@ -244,12 +252,14 @@ void MainApp::processMainScreen(touchPosition &touch, int down, int repeat) {
           if(TYPE_DIR(dirList[selected]->d_type)) {
             strcpy(directory, dirList[selected]->d_name);
             freescandir(dirList, numDirs);
+            delete [] pIcons;
 
             // move to the new directory
             chdir(directory);
 
             // scan the new directory
             numDirs = scandir(".", &dirList, generic_scandir_filter, generic_scandir_compar);
+            loadIcons();
 
             // reset the selected direntry and scroll
             selected     = -1;
@@ -282,7 +292,7 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
   // set up the command sprites
   if(selected != -1) {
     for(int i = ICON_COPY; i <= ICON_DELETE; i++)
-      oamSet(&oamSub, i, i*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
+      oamSet(&oamSub, i+2, (i+2)*24 + 8, 128, 0, 0, SpriteSize_16x16, SpriteColorFormat_256Color,
         icons[i].sub, -1, false, false, false, false, false);
   }
 
@@ -356,21 +366,14 @@ void MainApp::redrawList() {
 
   // draw the sprites
   for(int i = 0; i < numDirs && i < NUM_ENTRIES; i++) {
+    u16* gfxPtr = icons[FIRST_FILE_ICON + i].main;
+    oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
+             gfxPtr, -1, false, false, false, false, false);
     // this is a directory, give it a folder sprite!
-    if(TYPE_DIR(dirList[scroll+i]->d_type)) {
-      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             icons[ICON_FOLDER].main, -1, false, false, false, false, false);
-    }
-    // this is an fx2, give it an executable sprite!
-    else if(strcmp(".fx2", dirList[scroll+i]->d_name + strlen(dirList[scroll+i]->d_name)-4) == 0) {
-      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             icons[ICON_FX2].main, -1, false, false, false, false, false);
-    }
-    // this is something else, give it a file sprite!
-    else {
-      oamSet(&oamMain, i, 4, 8+16*i, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             icons[ICON_FILE].main, -1, false, false, false, false, false);
-    }
+    if(TYPE_DIR(dirList[scroll+i]->d_type))
+      dmaCopy(folderBitmap, gfxPtr, folderBitmapLen);
+	else
+	  dmaCopy(pIcons[scroll+i]->GetData(), gfxPtr, folderBitmapLen);
   }
 }
 
@@ -390,15 +393,11 @@ void MainApp::redrawInfo() {
   stat(dirList[selected]->d_name, &statbuf);
 
   sprintf(str, "%s\n", dirList[selected]->d_name);
+  u16* gfxPtr = icons[FIRST_FILE_ICON].sub;
   oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-         icons[ICON_FOLDER].sub, -1, false, false, false, false, false);
+         gfxPtr, -1, false, false, false, false, false);
   if(!TYPE_DIR(dirList[selected]->d_type)) {
-    if(strcmp(".fx2", dirList[selected]->d_name + strlen(dirList[selected]->d_name)-4) == 0)
-      oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             icons[ICON_FX2].sub, -1, false, false, false, false, false);
-    else
-      oamSet(&oamSub, 0, 14, 18, 0, 15, SpriteSize_16x16, SpriteColorFormat_Bmp,
-             icons[ICON_FILE].sub, -1, false, false, false, false, false);
+    dmaCopy(pIcons[selected]->GetData(), gfxPtr, folderBitmapLen);
     int tmpLen = strlen(str);
     g_guiManager->GetFileDescription(dirList[selected]->d_name, str + tmpLen, sizeof(str)-tmpLen);
     strncat(str, "\nSize: ", sizeof(str));
@@ -421,10 +420,13 @@ void MainApp::redrawInfo() {
     else
       sprintf(str+strlen(str), "%u MB\n", statbuf.st_size/1048576);
   }
-  else if(strcmp("..", dirList[selected]->d_name) == 0)
-    strcat(str, "Parent Directory");
-  else
-    strcat(str, "Directory");
+  else {
+    dmaCopy(folderBitmap, gfxPtr, folderBitmapLen);
+    if(strcmp("..", dirList[selected]->d_name) == 0)
+      strcat(str, "Parent Directory");
+    else
+      strcat(str, "Directory");
+  }
 
   font->PrintText(&surface, 16, 16-1, str, Colors::Black, PrintTextFlags::AtBaseline);
 }
