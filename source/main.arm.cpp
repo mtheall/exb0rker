@@ -297,7 +297,7 @@ void MainApp::processSubScreen(touchPosition &touch, int down, int repeat) {
   }
 
   for(int i = ICON_COPY; cmd == COMMAND_NONE && i <= ICON_DELETE; i++) {
-    if(touch.px > i*24 + 8 && touch.px < (i+1)*24 &&
+    if(touch.px > (i+2)*24 + 8 && touch.px < (i+3)*24 &&
        touch.py > 128      && touch.py < 128+16) {
       cmd = (command_t)(i - (int)ICON_COPY + (int)COMMAND_COPY);
 
